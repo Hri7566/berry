@@ -1,0 +1,15 @@
+{
+    "name": "berry",
+    "module": "src/index.ts",
+    "type": "module",
+    "private": true,
+    "devDependencies": {
+        "@types/bun": "latest"
+    },
+    "peerDependencies": {
+        "typescript": "^5"
+    },
+    "dependencies": {
+        "mpp-client-net": "^1.2.4"
+    }
+}
