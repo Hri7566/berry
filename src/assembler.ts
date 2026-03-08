@@ -184,7 +184,12 @@ type Operand =
     | { kind: "inx"; value: number }
     | { kind: "iny"; value: number }
     | { kind: "num"; value: number } // bare decimal/hex number, context-determines mode
-    | { kind: "label"; name: string };
+    | { kind: "label"; name: string }
+    | { kind: "labx"; name: string } // label,X
+    | { kind: "laby"; name: string } // label,Y
+    | { kind: "lind"; name: string } // (label) indirect
+    | { kind: "linx"; name: string } // (label,X) indexed indirect
+    | { kind: "liny"; name: string }; // (label),Y indirect indexed
 
 function parseOperand(op: string): Operand | null {
     op = op.trim();
@@ -235,6 +240,26 @@ function parseOperand(op: string): Operand | null {
     // Bare decimal
     if ((m = op.match(/^(-?\d+)$/)))
         return { kind: "num", value: parseInt(m[1]!, 10) };
+
+    // (label,X) — indexed indirect
+    if ((m = op.match(/^\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*[Xx]\s*\)$/)))
+        return { kind: "linx", name: m[1]! };
+
+    // (label),Y — indirect indexed
+    if ((m = op.match(/^\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*,\s*[Yy]$/)))
+        return { kind: "liny", name: m[1]! };
+
+    // (label) — indirect
+    if ((m = op.match(/^\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)$/)))
+        return { kind: "lind", name: m[1]! };
+
+    // label,X
+    if ((m = op.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*,\s*[Xx]$/)))
+        return { kind: "labx", name: m[1]! };
+
+    // label,Y
+    if ((m = op.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*,\s*[Yy]$/)))
+        return { kind: "laby", name: m[1]! };
 
     // Label identifier
     if ((m = op.match(/^([A-Za-z_][A-Za-z0-9_]*)$/)))
@@ -323,9 +348,15 @@ export function assemble(
                 if (!op)
                     return { bytes: [], error: `Bad operand: ${p.rawOperand}` };
 
-                if (op.kind === "label" || op.kind === "num") {
-                    // Guess: 3 bytes (abs) for non-branches
+                if (op.kind === "label" || op.kind === "num" || op.kind === "lind") {
+                    // Guess: 3 bytes (abs/ind) for non-branches
                     size = 3;
+                } else if (op.kind === "labx") {
+                    size = "abx" in modes ? 3 : 2; // zpx fallback
+                } else if (op.kind === "laby") {
+                    size = "aby" in modes ? 3 : 2; // zpy fallback
+                } else if (op.kind === "linx" || op.kind === "liny") {
+                    size = 2;
                 } else if (op.kind === "imp" && "imp" in modes) {
                     size = 1;
                 } else if (op.kind === "acc" && "acc" in modes) {
@@ -431,6 +462,45 @@ export function assemble(
                     bytes: [],
                     error: `${line.mnemonic}: can't use label as operand`
                 };
+        } else if (op.kind === "labx") {
+            const t = labels.get(op.name);
+            if (t === undefined)
+                return { bytes: [], error: `Undefined label: ${op.name}` };
+            if ("abx" in modes) { finalMode = "abx"; finalValue = t; }
+            else if ("zpx" in modes) { finalMode = "zpx"; finalValue = t; }
+            else return { bytes: [], error: `${line.mnemonic}: no X-indexed mode` };
+        } else if (op.kind === "laby") {
+            const t = labels.get(op.name);
+            if (t === undefined)
+                return { bytes: [], error: `Undefined label: ${op.name}` };
+            if ("aby" in modes) { finalMode = "aby"; finalValue = t; }
+            else if ("zpy" in modes) { finalMode = "zpy"; finalValue = t; }
+            else return { bytes: [], error: `${line.mnemonic}: no Y-indexed mode` };
+        } else if (op.kind === "lind") {
+            const t = labels.get(op.name);
+            if (t === undefined)
+                return { bytes: [], error: `Undefined label: ${op.name}` };
+            if (!("ind" in modes))
+                return { bytes: [], error: `${line.mnemonic}: no indirect mode` };
+            finalMode = "ind"; finalValue = t;
+        } else if (op.kind === "linx") {
+            const t = labels.get(op.name);
+            if (t === undefined)
+                return { bytes: [], error: `Undefined label: ${op.name}` };
+            if (t > 0xff)
+                return { bytes: [], error: `Label ${op.name} must be zero-page for (label,X)` };
+            if (!("inx" in modes))
+                return { bytes: [], error: `${line.mnemonic}: no (zp,X) mode` };
+            finalMode = "inx"; finalValue = t;
+        } else if (op.kind === "liny") {
+            const t = labels.get(op.name);
+            if (t === undefined)
+                return { bytes: [], error: `Undefined label: ${op.name}` };
+            if (t > 0xff)
+                return { bytes: [], error: `Label ${op.name} must be zero-page for (label),Y` };
+            if (!("iny" in modes))
+                return { bytes: [], error: `${line.mnemonic}: no (zp),Y mode` };
+            finalMode = "iny"; finalValue = t;
         } else if (op.kind === "num") {
             const v = op.value;
             if (v >= 0 && v <= 0xff && "zp" in modes) {
